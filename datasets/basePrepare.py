@@ -2,7 +2,6 @@ import os
 import glob
 import math
 import scipy
-import scipy.io as sio
 import numpy as np
 from PIL import Image
 from PIL import ImageDraw
@@ -11,12 +10,26 @@ from abc import ABCMeta,abstractmethod
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 import scipy.spatial
+import multiprocessing
+
 
 class BasePrepare(metaclass=ABCMeta):
-    def __init__(self,k=4,max_sigma=100,para=0.3):
+    def __init__(self,img_path,gts_path,density_path,dot_path,ext='*.jpg',k=4,max_sigma=100,para=0.3):
         self.k=k
         self.max_sigma=max_sigma
         self.para=para
+
+        self.img_path=img_path
+        self.gts_path=gts_path
+        self.density_npy_path=density_path
+        self.dot_npy_path=dot_path
+
+        if not os.path.exists(self.density_npy_path):
+            os.makedirs(self.density_npy_path)
+        if not os.path.exists(self.dot_npy_path):
+            os.makedirs(self.dot_npy_path)
+
+        self.image_files=sorted(glob.glob(os.path.join(self.img_path, ext)))
 
     @abstractmethod
     def load_gt(self, gtfile_path):
@@ -26,6 +39,9 @@ class BasePrepare(metaclass=ABCMeta):
         '''
         pass
 
+    @abstractmethod
+    def get_infos(self,image_file_name, gt_file_base_path):
+        pass
     def generate_dot_map(self, locations, dot_map_shape):
         '''
         生成一个二维的0，1人头点图,有人头的地方为255，其他的地方为0
@@ -42,6 +58,7 @@ class BasePrepare(metaclass=ABCMeta):
             except IndexError:
                 print((dot_map_shape[1], dot_map_shape[0]))
         return dot_map
+
 
     def adaptive_gaussian_generator(self,dot_map):
         '''
@@ -70,6 +87,28 @@ class BasePrepare(metaclass=ABCMeta):
             density_map += ndimage.filters.gaussian_filter(pt2d, sigma)
         return density_map
 
+    def non_multi_process_adaptive(self,):
+        for i,image_file in enumerate(self.image_files):
+            self.process_adaptive_singlefile(image_file)
+
+    def process_adaptive_singlefile(self,image_file):
+        print(image_file)
+        image = Image.open(image_file, mode='r').convert("RGB")
+        gt_file_path,substr=self.get_infos(image_file,self.gts_path)
+        locations = self.load_gt(gt_file_path)
+        dot_map = self.generate_dot_map(locations, image.size)
+        desity_map = self.adaptive_gaussian_generator(dot_map)
+
+        np.save(os.path.join(self.density_npy_path,substr + '.npy'),desity_map)
+        np.save(os.path.join(self.dot_npy_path,substr + '.npy'),dot_map)
+
+
+    def multi_process_adaptive(self):
+        pool = multiprocessing.Pool(processes=16)
+        for file_name in self.image_files:
+            pool.apply_async(self.process_adaptive_singlefile, (file_name, ))
+        pool.close()
+        pool.join()
     @staticmethod
     def draw_head_dot(image_file, gt_file, radius=5, show=True):
         '''
