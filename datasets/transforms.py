@@ -112,6 +112,6 @@ class GTScaleDown(object):
         w, h = density.size
         if self.factor==1:
             return density
-        density = density.resize((w//self.factor, h//self.factor), Image.BICUBIC)*self.factor*self.factor
+        density = Image.fromarray(np.array(density.resize((w//self.factor, h//self.factor), Image.BICUBIC))*self.factor*self.factor)
 
         return density

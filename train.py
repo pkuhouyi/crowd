@@ -16,11 +16,23 @@ import torch
 import random
 from utils.utils import save_checkpoint
 
+
 parser = argparse.ArgumentParser(description='PyTorch CSRNet')
-parser.add_argument('train_json', metavar='TRAIN',help='path to train json')
-parser.add_argument('test_json', metavar='TEST',help='path to test json')
-parser.add_argument('--pre', '-p', metavar='PRETRAINED', default=None,type=str,help='path to the pretrained model')
-parser.add_argument('task',metavar='TASK', type=str,help='task id to use.')
+parser.add_argument('--original_lr',type=float, default=1e-9)
+parser.add_argument('--lr',type=float, default=1e-7)
+parser.add_argument('--batch_size', type=int, default=8)
+parser.add_argument('--momentum', type=float, default=0.9)
+parser.add_argument('--decay', type=float,default=5*1e-4)
+parser.add_argument('--start_epoch', type=int, default=0)
+parser.add_argument('--epochs', type=int, default=400)
+parser.add_argument('--resume', default=None, type=str,help='path to the pretrained model')
+parser.add_argument('--steps', type=int, default=100)
+parser.add_argument('--print_freq', type=int, default=1)
+parser.add_argument('--seed', type=int, default=100)
+parser.add_argument('--train_data_path', default='/home/houyi/datasets/ShanghaiTech/part_B/train_data/', type=str)
+parser.add_argument('--test_data_path', default='/home/houyi/datasets/ShanghaiTech/part_B/test_data/', type=str)
+
+
 args = parser.parse_args()
 
 
@@ -50,34 +62,33 @@ def random_crop(dst_size, img, den, dot=None):
     :param dot:
     :return:
     '''
-    factor=1
-    factor2=factor*factor
+    factor=8
     if dot==None:
         _,ts_hd,ts_wd = img.shape
 
-        x1 = random.randint(0, ts_wd - dst_size[1])//factor2
-        y1 = random.randint(0, ts_hd - dst_size[0])//factor2
+        x1 = random.randint(0, ts_wd - dst_size[1])//factor
+        y1 = random.randint(0, ts_hd - dst_size[0])//factor
         x2 = x1 + dst_size[1]
         y2 = y1 + dst_size[0]
 
-        label_x1 = x1//factor2
-        label_y1 = y1//factor2
-        label_x2 = x2//factor2
-        label_y2 = y2//factor2
+        label_x1 = x1//factor
+        label_y1 = y1//factor
+        label_x2 = x2//factor
+        label_y2 = y2//factor
 
         return img[:,y1:y2,x1:x2], den[label_y1:label_y2,label_x1:label_x2]
     else:
         _,ts_hd,ts_wd = img.shape
 
-        x1 = random.randint(0, ts_wd - dst_size[1])//factor2
-        y1 = random.randint(0, ts_hd - dst_size[0])//factor2
+        x1 = random.randint(0, ts_wd - dst_size[1])//factor
+        y1 = random.randint(0, ts_hd - dst_size[0])//factor
         x2 = x1 + dst_size[1]
         y2 = y1 + dst_size[0]
 
-        label_x1 = x1//factor2
-        label_y1 = y1//factor2
-        label_x2 = x2//factor2
-        label_y2 = y2//factor2
+        label_x1 = x1//factor
+        label_y1 = y1//factor
+        label_x2 = x2//factor
+        label_y2 = y2//factor
 
         return img[:,y1:y2,x1:x2], den[label_y1:label_y2,label_x1:label_x2], dot[label_y1:label_y2,label_x1:label_x2]
 
@@ -91,7 +102,7 @@ def collate_func(batch):
         cropped_imgs = []
         cropped_dens = []
         for i_sample in range(len(batch)):
-            _img, _den = random_crop(imgs[i_sample],dens[i_sample],[min_ht,min_wd])
+            _img, _den = random_crop([min_ht,min_wd], imgs[i_sample],dens[i_sample])
             cropped_imgs.append(_img)
             cropped_dens.append(_den)
 
@@ -117,8 +128,6 @@ def collate_func(batch):
         return [cropped_imgs, cropped_dens, cropped_dots]
 
 
-
-
 def train(train_loader, model, criterion, optimizer, epoch):
 
     losses = AverageMeter()
@@ -131,6 +140,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
     end = time.time()
 
     for i,(img, target)in enumerate(train_loader):
+        print(i)
         data_time.update(time.time() - end)
 
         img = img.cuda()
@@ -159,6 +169,8 @@ def train(train_loader, model, criterion, optimizer, epoch):
                 epoch, i, len(train_loader), batch_time=batch_time,
                 data_time=data_time, loss=losses))
 
+
+
 def validate(val_loader, model, criterion):
     print ('begin test')
 
@@ -176,6 +188,8 @@ def validate(val_loader, model, criterion):
 def adjust_learning_rate(optimizer, epoch):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     args.lr = args.original_lr
+    args.steps=[-1,1,100,150]
+    args.scales = [1,1,1,1]
     for i in range(len(args.steps)):
         scale = args.scales[i] if i < len(args.scales) else 1
         if epoch >= args.steps[i]:
@@ -188,13 +202,13 @@ def adjust_learning_rate(optimizer, epoch):
         param_group['lr'] = args.lr
 
 def main():
-    os.environ['CUDA_VISIBLE_DEVICES'] = 0
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     torch.cuda.manual_seed(args.seed)
 
 
     mean_std = ([0.537967503071, 0.460666239262, 0.41356408596],[0.220573320985, 0.218155637383, 0.20540446043])
     log_para = 100.
-    factor = 1
+    factor = 8
     train_main_transform = Compose([RandomHorizontallyFlip()])
     img_transform = transforms.Compose([
         transforms.ToTensor(),
@@ -205,12 +219,12 @@ def main():
         LabelNormalize(log_para)
     ])
 
-    train_set = SHHA(args.data_path,main_transform=train_main_transform, img_transform=img_transform, density_transform=gt_transform, dot_transform=gt_transform)
-    train_loader = DataLoader(train_set, batch_size=args.batchsize, num_workers=8, collate_fn=collate_func, shuffle=True, drop_last=True)
+    train_set = SHHA(args.train_data_path,main_transform=train_main_transform, img_transform=img_transform, density_transform=gt_transform)
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, num_workers=8, collate_fn=collate_func, shuffle=True, drop_last=True)
 
 
-    val_set = SHHA(args.data_path, main_transform=None, img_transform=img_transform, density_transform=gt_transform, dot_transform=gt_transform)
-    val_loader = DataLoader(val_set, batch_size=args.batchsize, num_workers=8, shuffle=True, drop_last=False)
+    val_set = SHHA(args.test_data_path, main_transform=None, img_transform=img_transform, density_transform=gt_transform)
+    val_loader = DataLoader(val_set, batch_size=args.batch_size, num_workers=8, shuffle=True, drop_last=False)
 
 
     model = CSRNet()
@@ -219,7 +233,7 @@ def main():
     optimizer = torch.optim.SGD(model.parameters(), args.lr,momentum=args.momentum,weight_decay=args.decay)
 
     best_prec1=0
-    if args.pre:
+    if args.resume!=None:
         if os.path.isfile(args.pre):
             print("=> loading checkpoint '{}'".format(args.pre))
             checkpoint = torch.load(args.pre)
@@ -234,21 +248,21 @@ def main():
 
     for epoch in range(args.start_epoch, args.epochs):
 
-        adjust_learning_rate(optimizer, epoch)
+        # adjust_learning_rate(optimizer, epoch)
         train(train_loader, model, criterion, optimizer, epoch)
-        prec1 = validate(val_loader, model, criterion)
-
-        is_best = prec1 < best_prec1
-        best_prec1 = min(prec1, best_prec1)
-        print(' * best MAE {mae:.3f} '.format(mae=best_prec1))
-
-        save_checkpoint({
-            'epoch': epoch + 1,
-            'arch': args.pre,
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-            'optimizer' : optimizer.state_dict(),
-        }, is_best,args.task)
+        # prec1 = validate(val_loader, model, criterion)
+        #
+        # is_best = prec1 < best_prec1
+        # best_prec1 = min(prec1, best_prec1)
+        # print(' * best MAE {mae:.3f} '.format(mae=best_prec1))
+        #
+        # save_checkpoint({
+        #     'epoch': epoch + 1,
+        #     'arch': args.pre,
+        #     'state_dict': model.state_dict(),
+        #     'best_prec1': best_prec1,
+        #     'optimizer' : optimizer.state_dict(),
+        # }, is_best,args.task)
 
 
 if __name__ == '__main__':
